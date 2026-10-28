@@ -1,0 +1,105 @@
+name: Build downloadable Rust server
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  HORIZON_PROJECT_ROOT: ${{ github.workspace }}
+
+jobs:
+  plugin:
+    name: WASM plugin
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: delivery
+          persist-credentials: false
+      - name: Extract verified sources
+        run: python3 delivery/prepare_bundle.py extract
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: Pumpkin-MC/Pumpkin
+          ref: ff873cbbb8cc8fe591fb09aaf7d70b30517a57d0
+          path: server/engine
+          persist-credentials: false
+      - name: Install Rust
+        run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --target wasm32-wasip2
+      - name: Verify and build plugin
+        env:
+          RUSTUP_TOOLCHAIN: 1.99.1
+          CARGO_TARGET_DIR: ${{ github.workspace }}/work/build/plugin
+        run: |
+          python3 server/scripts/build-linux.py --check-only
+          python3 server/tests/check_profile.py
+          cargo fmt --manifest-path server/plugins/horizon-base/Cargo.toml --check
+          cargo test --locked -j 2 --manifest-path server/plugins/horizon-base/Cargo.toml
+          cargo build --release --locked -j 2 --target wasm32-wasip2 --manifest-path server/plugins/horizon-base/Cargo.toml
+          python3 delivery/prepare_bundle.py plugin
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: horizon-base-wasm
+          path: outputs/downloads/horizon-base-wasm.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  server:
+    name: Server ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            label: linux-x64
+          - os: windows-latest
+            label: windows-x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: delivery
+          persist-credentials: false
+      - name: Preserve source line endings
+        run: git config --global core.autocrlf false
+      - name: Extract verified sources
+        run: python delivery/prepare_bundle.py extract
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: Pumpkin-MC/Pumpkin
+          ref: ff873cbbb8cc8fe591fb09aaf7d70b30517a57d0
+          path: server/engine
+          persist-credentials: false
+      - name: Install Rust on Linux
+        if: runner.os == 'Linux'
+        run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --target wasm32-wasip2
+      - name: Build Linux server and plugin
+        if: runner.os == 'Linux'
+        run: python3 server/scripts/build-linux.py --jobs 2
+      - name: Build Windows server and plugin
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./server/scripts/build.ps1 -Jobs 2
+      - name: Package ready to run server
+        run: python delivery/prepare_bundle.py ${{ matrix.label }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: horizon-rust-${{ matrix.label }}
+          path: outputs/downloads/horizon-rust-${{ matrix.label }}.*
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: build-logs-${{ matrix.label }}
+          path: |
+            work/build/*.log
+            work/build/linux/*.log
+          if-no-files-found: ignore
+          retention-days: 14
