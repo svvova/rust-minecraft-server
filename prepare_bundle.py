@@ -10,7 +10,7 @@ import zipfile
 ROOT = Path.cwd()
 DELIVERY = Path(__file__).resolve().parent
 SERVER = ROOT / "server"
-SOURCE_SHA256 = "36581db0205b2d5ba8d23b3c9dc6d780f19dd917b43559f97896300a5b99f985"
+SOURCE_SHA256 = "f9baec7446cb9050a1f8e8d3458f013d7168f7cc3ffc17b3348f74c93cd3ea94"
 
 
 def copy(source, target):
