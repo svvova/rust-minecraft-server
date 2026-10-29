@@ -8,6 +8,15 @@ on:
         required: true
         default: '40830602979'
         type: string
+      platform:
+        description: Platform to verify
+        required: true
+        default: both
+        type: choice
+        options:
+          - both
+          - linux-x64
+          - windows-x64
 
 permissions:
   contents: read
@@ -18,12 +27,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-24.04
-            label: linux-x64
-          - os: windows-latest
-            label: windows-x64
-    runs-on: ${{ matrix.os }}
+        label: ${{ fromJSON(inputs.platform == 'linux-x64' && '["linux-x64"]' || inputs.platform == 'windows-x64' && '["windows-x64"]' || '["linux-x64","windows-x64"]') }}
+    runs-on: ${{ matrix.label == 'linux-x64' && 'ubuntu-24.04' || 'windows-latest' }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
