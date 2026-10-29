@@ -43,6 +43,13 @@ jobs:
           github-token: ${{ github.token }}
       - name: Start server, verify plugin, restart and invalid inputs
         run: python runtime_smoke.py
+      - name: Upload verified server package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: verified-horizon-rust-${{ matrix.label }}
+          path: outputs/ready/
+          if-no-files-found: error
+          retention-days: 14
       - name: Upload verification evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
