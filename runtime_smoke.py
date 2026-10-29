@@ -11,7 +11,9 @@ import sys
 import tarfile
 import threading
 import time
+import tomllib
 import zipfile
+from prepare_bundle import SOURCE_SHA256
 
 ROOT = Path.cwd()
 OUT = ROOT / "outputs/smoke"
@@ -50,7 +52,35 @@ def extract_bundle():
     for name, expected in checksums.items():
         assert (target / name).resolve().is_relative_to(target.resolve())
         assert digest(target / name) == expected, name
+    # Reuse the compiled engine and plugin; replace only the corrected profile
+    # and the corresponding source archive. Keep the original build report.
+    source_archive = ROOT / "source-slice.zip"
+    assert digest(source_archive) == SOURCE_SHA256
+    with zipfile.ZipFile(source_archive) as source:
+        profile = source.read("server/config/pumpkin.toml")
+    (target / "pumpkin.toml").write_bytes(profile)
+    (target / "config/pumpkin.toml").write_bytes(profile)
+    shutil.copy2(source_archive, target / "source-slice.zip")
+    provenance = {"native_build_run": 40830602979,
+                  "native_source_commit": "30857a277eeab55d14b09a685f4a80aa7c671475",
+                  "original_package_sha256": digest(archive),
+                  "source_archive_sha256": SOURCE_SHA256,
+                  "correction": "GameMode enum spelling: Survival; native engine and WASM unchanged"}
+    (target / "package-provenance.json").write_text(json.dumps(provenance, indent=2), encoding="utf-8")
+    checksums = {str(path.relative_to(target)).replace("\\", "/"): digest(path)
+                 for path in sorted(target.rglob("*")) if path.is_file() and path.name != "SHA256.json"}
+    (target / "SHA256.json").write_text(json.dumps(checksums, indent=2), encoding="utf-8")
     return target
+
+
+def write_verified_package(package):
+    directory = ROOT / "outputs/ready"
+    directory.mkdir(parents=True)
+    label = "windows-x64" if sys.platform == "win32" else "linux-x64"
+    filename = directory / ("horizon-rust-" + label)
+    archive = Path(shutil.make_archive(str(filename), "zip" if sys.platform == "win32" else "gztar",
+                                      root_dir=package))
+    return {"filename": archive.name, "sha256": digest(archive), "bytes": archive.stat().st_size}
 
 
 def fixture(package, name):
@@ -102,6 +132,17 @@ def session(directory, label, expected_error=None):
 
     try:
         wait_for(lambda output: "Server is now running." in output, 240)
+        effective = tomllib.loads((directory / "pumpkin.toml").read_text(encoding="utf-8"))
+        assert effective["default_level_name"] == "horizon-test", "Profile silently reset"
+        assert effective["networking"]["java"]["address"] == "127.0.0.1:25565"
+        assert effective["networking"]["java"]["online_mode"] is True
+        assert effective["networking"]["java"]["encryption"] is True
+        assert effective["telemetry"]["enabled"] is False
+        for listener in ("bedrock", "query", "management", "lan_broadcast"):
+            assert effective["networking"][listener]["enabled"] is False, listener
+        assert effective["plugins"]["max_memory_mb"] == 128
+        assert effective["plugins"]["allow_unsigned"] is False
+        assert effective["plugins"]["overrides"]["horizon-base"]["allow_unsigned"] is True
         process.stdin.write("horizon status\n")
         process.stdin.flush()
         if expected_error is None:
@@ -148,7 +189,8 @@ def main():
         for line in output.splitlines())))
     report = {"platform": sys.platform, "cases": results,
               "saved_world_metadata": [str(path.relative_to(valid)) for path in saved],
-              "real_clients_and_block_actions": "not-run"}
+              "real_clients_and_block_actions": "not-run",
+              "verified_package": write_verified_package(package)}
     (OUT / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(json.dumps(report, indent=2))
 
