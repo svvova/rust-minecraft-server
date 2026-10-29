@@ -100,6 +100,7 @@ def session(directory, label, expected_error=None):
         if "TOKEN" in key or "SECRET" in key:
             environment.pop(key)
     environment["NO_COLOR"] = "1"
+    environment["RUST_LOG"] = "info"
     process = subprocess.Popen([str(binary)], cwd=directory, env=environment,
                                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
@@ -155,6 +156,7 @@ def session(directory, label, expected_error=None):
             assert LOADED not in "".join(lines), "Failed plugin marked loaded"
         process.stdin.write("stop\n")
         process.stdin.flush()
+        process.stdin.close()
         result = process.wait(timeout=90)
         thread.join(timeout=5)
         assert result == 0, f"{label}: server exit {result}"

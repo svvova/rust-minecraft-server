@@ -76,7 +76,7 @@ def package(kind):
         shutil.make_archive(str(destination / name), "gztar", root_dir=target)
     else:
         shutil.make_archive(str(destination / name), "zip", root_dir=target)
-    print(f"Готовый пакет: {destination / name}")
+    print(f"Ready package: {destination / name}")
 
 
 if __name__ == "__main__":
