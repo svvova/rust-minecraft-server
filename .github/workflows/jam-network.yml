@@ -1,0 +1,92 @@
+name: Jam Rust proxy and server — isolated integration
+
+on:
+  workflow_dispatch:
+    inputs:
+      foundation_run_id:
+        description: Successful Jam foundation run containing both Linux binaries
+        required: true
+        type: string
+        default: '41027465135'
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  isolated-network:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      FOUNDATION_RUN_ID: ${{ inputs.foundation_run_id }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout prepared test source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: repository
+          persist-credentials: false
+      - name: Validate source build
+        shell: bash
+        run: |
+          [[ "$FOUNDATION_RUN_ID" =~ ^[0-9]+$ ]] || exit 1
+          mkdir -p work outputs/server/jam-network
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$FOUNDATION_RUN_ID" > work/source-run.json
+          python3 - <<'PY'
+          import json, pathlib
+          r = json.loads(pathlib.Path('work/source-run.json').read_text())
+          assert r['status'] == 'completed' and r['conclusion'] == 'success'
+          assert r['path'] == '.github/workflows/jam-foundation.yml'
+          assert r['head_sha'] == '718296cffc971faf24d5dbe0d6373f57e754792d'
+          facts = {k: r[k] for k in ('id', 'html_url', 'head_sha', 'path', 'status', 'conclusion')}
+          pathlib.Path('outputs/server/jam-network/source-build.json').write_text(json.dumps(facts, indent=2) + '\n')
+          PY
+      - name: Download tested server artifact
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: jam-patched-server-foundation
+          path: work/artifacts/server
+          run-id: ${{ inputs.foundation_run_id }}
+          github-token: ${{ github.token }}
+      - name: Download pinned proxy candidate artifact
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: jam-proxy-candidate-only
+          path: work/artifacts/proxy
+          run-id: ${{ inputs.foundation_run_id }}
+          github-token: ${{ github.token }}
+      - name: Verify and unpack public network test
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib, pathlib, zipfile
+          p = pathlib.Path('repository/jam-network-source.zip')
+          assert hashlib.sha256(p.read_bytes()).hexdigest() == 'c100b24d0a9a55f8cbc5187349008c012d52a65aa97b7662db95b26fc37e7a4b'
+          with zipfile.ZipFile(p) as z:
+              assert set(z.namelist()) == {'server/tests/jam_proxy_integration.py', 'server/tests/jam_proxy_forwarding.py'}
+              z.extractall('.')
+          PY
+      - name: Check both binaries and run loopback integration
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, pathlib, subprocess, sys
+          s = list(pathlib.Path('work/artifacts/server').rglob('pumpkin'))
+          p = list(pathlib.Path('work/artifacts/proxy').rglob('infrarust'))
+          assert len(s) == len(p) == 1
+          reports = list(pathlib.Path('work/artifacts/server').rglob('report.json'))
+          tested = [json.loads(r.read_text()) for r in reports if 'binary_sha256' in json.loads(r.read_text())]
+          assert len(tested) == 1 and tested[0]['all_cases_passed'] and tested[0]['clean_shutdown']
+          sd = hashlib.sha256(s[0].read_bytes()).hexdigest()
+          pd = hashlib.sha256(p[0].read_bytes()).hexdigest()
+          assert sd == tested[0]['binary_sha256']
+          subprocess.run([sys.executable, 'server/tests/jam_proxy_integration.py', '--server', str(s[0].resolve()), '--proxy', str(p[0].resolve()), '--server-sha256', sd, '--proxy-sha256', pd], check=True)
+          PY
+      - name: Upload isolated evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: jam-rust-network-evidence
+          path: outputs/server/jam-network/
+          if-no-files-found: warn
+          retention-days: 14
